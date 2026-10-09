@@ -1,0 +1,7 @@
+.venv*/
+__pycache__/
+*.pyc
+data/
+output/
+models/
+.test-artifacts/

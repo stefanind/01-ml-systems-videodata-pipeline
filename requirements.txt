@@ -1,0 +1,11 @@
+# CUDA-enabled PyTorch comes from the RunPod PyTorch template.
+transformers==4.51.3
+huggingface-hub>=0.30,<1
+av==16.0.1
+numpy>=1.26,<3
+pyarrow>=18,<23
+requests>=2.32,<3
+psutil>=7,<8
+nvidia-ml-py>=12,<14
+matplotlib>=3.9,<4
+Pillow>=10,<12
