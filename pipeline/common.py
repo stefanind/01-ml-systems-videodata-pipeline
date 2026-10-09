@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def read_args(parser=None):
+    """Read the CLI configuration and remember its location for relative paths."""
     parser = parser or argparse.ArgumentParser()
     parser.add_argument("--config", default=str(ROOT / "config.json"))
     args = parser.parse_args()
@@ -18,19 +19,23 @@ def read_args(parser=None):
 
 
 def path(config, key, *parts):
+    """Resolve a configured path relative to the config file, then add subpaths."""
     return config["_config_file"].parent / config[key] / Path(*parts)
 
 
 def save_json(destination, value):
+    """Write a readable JSON file, creating its parent directory if needed."""
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
 
 
 def selection(config):
+    """Load the ordered video records that decode wrote for later stages."""
     return json.loads(path(config, "data_dir", "selection.json").read_text(encoding="utf-8"))
 
 
 def shard_urls(config):
+    """Read shard URLs in file order, ignoring comments and empty lines."""
     lines = path(config, "shards_file").read_text(encoding="utf-8").splitlines()
     urls = [line.strip() for line in lines if line.strip() and not line.lstrip().startswith("#")]
     if not urls:

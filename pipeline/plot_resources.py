@@ -5,7 +5,7 @@ import json
 import math
 
 import matplotlib
-matplotlib.use("Agg")
+matplotlib.use("Agg")  # Save a PNG without needing a desktop/display on RunPod.
 import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
 
@@ -13,6 +13,7 @@ from .common import path, read_args
 
 
 def main():
+    """Combine resource samples and stage timings into a shared timeline."""
     config, _ = read_args()
     output = path(config, "output_dir")
     with (output / "resources.csv").open(encoding="utf-8", newline="") as source:
@@ -24,11 +25,13 @@ def main():
     fig, axes = plt.subplots(5, 1, sharex=True, figsize=(12, 12))
 
     def line(axis, field, label):
+        # A blank sample stays missing in the plot instead of appearing as zero.
         values = [float(row[field]) if row[field] else float("nan") for row in samples]
         if not any(math.isfinite(value) for value in values):
             label += " (unavailable)"
         axis.plot(times, values, label=label)
 
+    # Separate panels keep percentages, memory sizes, and I/O rates readable.
     line(axes[0], "cpu_percent", "System CPU")
     line(axes[0], "gpu_percent", "GPU")
     axes[0].set_ylabel("Utilization (%)")
@@ -44,6 +47,8 @@ def main():
     line(axes[4], "disk_read_mb_s", "Read")
     line(axes[4], "disk_write_mb_s", "Write")
     axes[4].set_ylabel("Disk (MB/s)")
+    # Shade the same stage interval across every panel so resource activity can
+    # be matched to the work that was running at that moment.
     for index, stage in enumerate(stages):
         left, right = float(stage["start_seconds"]), float(stage["end_seconds"])
         for axis in axes:

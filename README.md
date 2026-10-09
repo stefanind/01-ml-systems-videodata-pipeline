@@ -66,6 +66,24 @@ python -m pipeline.write
 Each script accepts `--config path/to/config.json`. Paths inside a config are
 relative to that config's directory. Model weights must already be cached by setup.
 
+Each stage also exposes a small function for one item. Its `main()` function reads
+the config and loops over those items; the baseline runner still waits for each
+complete stage. Comments in the code explain the inputs, outputs, and file handoffs.
+
+| Module | Reusable function | Result |
+|---|---|---|
+| `download.py` | `download_shard(url, config, token=None, reuse_shards=False)` | Saved shard path |
+| `decode.py` | `iter_videos(config)` / `decode_record(video, video_bytes, config)` | Input records and bytes / decoded record with duration |
+| `sample.py` | `sample_video(video, config)` | Sampled frames; saves frames and timestamps |
+| `preprocess.py` | `preprocess_video(video, config, processor, text=None)` | Prepared CPU tensors; also saves them |
+| `caption.py` | `caption_video(video, config, model, tokenizer)` | Caption text; also saves it |
+| `write.py` | `write_caption(video, caption, output)` | Final record written to an open JSONL file |
+
+Load the processor once with `load_processor(config)` and Qwen once with
+`load_model(config)`, which returns the model and tokenizer. Pass those objects
+to the per-video functions. They retain file handoffs so you can inspect each
+stage's output while learning.
+
 `python -m pipeline.run_baseline` downloads shards again so it measures real network input.
 For experiments using existing local shards:
 
@@ -98,81 +116,8 @@ Captioning prints the model's device and dtype, model load time, and progress an
 elapsed time for each video. For a slow run, check `nvidia-smi` in a second terminal
 and the latest rows of `output/resources.csv` to see GPU utilization and memory.
 
-If captioning fails with a CUDA launch error, retry that stage in a fresh process
-using the existing prepared inputs:
-
-```bash
-CUDA_LAUNCH_BLOCKING=1 python -m pipeline.caption
-```
-
-This makes CUDA calls synchronous so the traceback can identify the failing
-operation more precisely. Leave this debug setting unset for latency measurements.
-
-To test FP16 separately, wait for the current caption process to exit, then run:
-
-```bash
-CUDA_LAUNCH_BLOCKING=1 python -m pipeline.caption --config config.fp16.json
-```
-
-This tests whether the failure depends on precision. It uses the existing prepared
-inputs and writes per-video captions in `data/captions/`. A complete run with this
-config writes final results to `output/fp16/`. The FP16 trial is not a confirmed fix.
-
-If that attempt also hangs, stop its caption process before running this bounded
-diagnostic. It prints the blocked Python stack after 30 seconds and exits:
-
-```bash
-CUDA_LAUNCH_BLOCKING=1 python -u - <<'PY'
-import faulthandler
-import runpy
-import sys
-
-sys.argv = ["pipeline.caption", "--config", "config.fp16.json"]
-faulthandler.dump_traceback_later(30, exit=True)
-try:
-    runpy.run_module("pipeline.caption", run_name="__main__")
-finally:
-    faulthandler.cancel_dump_traceback_later()
-PY
-```
-
-The 30-second limit includes model startup. This is only for troubleshooting.
-
-For a failure located in `Conv3d`, test that operation separately after the failed
-caption process has exited:
-
-```bash
-env -u CUDA_LAUNCH_BLOCKING python -m pipeline.check_gpu --config config.fp16.json --no-cudnn
-```
-
-This reads the first video's prepared pixels and Qwen's cached vision config. It
-uses test weights for the same convolution shape and tests PyTorch's native path
-with cuDNN disabled. It prints each step and exits with a stack trace if GPU work
-takes over 20 seconds. It does not load the full model or write benchmark results.
-The test synchronizes before and after the convolution. Leave launch blocking
-unset here: the [native CUDA implementation](https://github.com/pytorch/pytorch/blob/v2.8.0/aten/src/ATen/native/cuda/NaiveDilatedConvolution.cu)
-processes patches one at a time, so forcing every launch to synchronize adds
-overhead. A watchdog timeout by itself does not establish a GPU fault.
-
-If the convolution keeps failing or timing out, compare a separate environment
-with [PyTorch 2.7.1, torchvision 0.22.1, and CUDA 12.6](https://pytorch.org/get-started/previous-versions/#v271):
-
-```bash
-bash setup_runpod.sh --cu126
-source .venv-cu126/bin/activate
-env -u CUDA_LAUNCH_BLOCKING -u TORCH_CUDNN_V8_API_DISABLED python -m pipeline.check_gpu --config config.fp16.json
-```
-
-This installs its own PyTorch and project dependencies in `.venv-cu126` without
-inheriting template packages. Setup reuses the cached model files. The check uses
-cuDNN normally and retains its 20-second watchdog. If it passes, try captioning:
-
-```bash
-env -u CUDA_LAUNCH_BLOCKING -u TORCH_CUDNN_V8_API_DISABLED python -m pipeline.caption --config config.fp16.json
-```
-
-This is an environment comparison, not a confirmed fix. The CUDA packages are
-large, so the first installation takes longer than setup with template PyTorch.
+Use the **RunPod PyTorch 2.4.0 image** for this baseline:
+`runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04`.
 
 Stage RSS includes child processes, so Python launchers do not hide the stage's RAM.
 System CPU, RAM, disk, and network counters include other applications. GPU counters
@@ -196,7 +141,8 @@ so do not run it alongside the baseline runner.
 ├── shards.txt
 ├── .gitignore
 ├── docs/
-│   └── IMPLEMENTATION_PLAN.md
+│   ├── v0_implementation_plan.md
+│   └── iterative_progression_plan.md
 ├── pipeline/
 │   ├── __init__.py
 │   ├── common.py
@@ -223,3 +169,7 @@ handle execution, measurements, and the plot. Run each script with
 The existing plan is in [docs/v0_implementation_plan.md](docs/v0_implementation_plan.md).
 Its contents are unchanged. Data, model weights, and results are created when you
 run setup and the pipeline; they are excluded from Git.
+
+The [iterative progression plan](docs/iterative_progression_plan.md) describes the
+next experiments. The reusable-function refactor is complete; establish the larger
+fixed-workload baseline before changing scheduling.

@@ -1,3 +1,3 @@
 # Start with one real FineVideo shard. Uncomment the second when ready.
 https://huggingface.co/datasets/HuggingFaceFV/finevideo/resolve/main/data/train-00000-of-01357.parquet
-# https://huggingface.co/datasets/HuggingFaceFV/finevideo/resolve/main/data/train-00001-of-01357.parquet
+https://huggingface.co/datasets/HuggingFaceFV/finevideo/resolve/main/data/train-00001-of-01357.parquet
