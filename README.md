@@ -27,6 +27,14 @@ commands below from the repository root.
    python -m pipeline.run_baseline
    ```
 
+Setup disables the optional `hf_transfer` downloader for the model download,
+so RunPod's inherited `HF_HUB_ENABLE_HF_TRANSFER=1` setting does not require an
+extra package. If you encounter that error with an older checkout, rerun setup:
+
+```bash
+HF_HUB_ENABLE_HF_TRANSFER=0 bash setup_runpod.sh
+```
+
 The default dtype is `bfloat16`. If your GPU does not support it, set `dtype` to
 `float16` in `config.json`. The entire model must fit on one GPU; there is no CPU
 offloading or quantization in this baseline.
@@ -86,6 +94,86 @@ Caption time includes loading the cached Qwen model. Total time ends after final
 writing and excludes validation and plotting. Failed runs retain partial timings
 with `status: failed`; their throughput is not reported as a successful result.
 
+Captioning prints the model's device and dtype, model load time, and progress and
+elapsed time for each video. For a slow run, check `nvidia-smi` in a second terminal
+and the latest rows of `output/resources.csv` to see GPU utilization and memory.
+
+If captioning fails with a CUDA launch error, retry that stage in a fresh process
+using the existing prepared inputs:
+
+```bash
+CUDA_LAUNCH_BLOCKING=1 python -m pipeline.caption
+```
+
+This makes CUDA calls synchronous so the traceback can identify the failing
+operation more precisely. Leave this debug setting unset for latency measurements.
+
+To test FP16 separately, wait for the current caption process to exit, then run:
+
+```bash
+CUDA_LAUNCH_BLOCKING=1 python -m pipeline.caption --config config.fp16.json
+```
+
+This tests whether the failure depends on precision. It uses the existing prepared
+inputs and writes per-video captions in `data/captions/`. A complete run with this
+config writes final results to `output/fp16/`. The FP16 trial is not a confirmed fix.
+
+If that attempt also hangs, stop its caption process before running this bounded
+diagnostic. It prints the blocked Python stack after 30 seconds and exits:
+
+```bash
+CUDA_LAUNCH_BLOCKING=1 python -u - <<'PY'
+import faulthandler
+import runpy
+import sys
+
+sys.argv = ["pipeline.caption", "--config", "config.fp16.json"]
+faulthandler.dump_traceback_later(30, exit=True)
+try:
+    runpy.run_module("pipeline.caption", run_name="__main__")
+finally:
+    faulthandler.cancel_dump_traceback_later()
+PY
+```
+
+The 30-second limit includes model startup. This is only for troubleshooting.
+
+For a failure located in `Conv3d`, test that operation separately after the failed
+caption process has exited:
+
+```bash
+env -u CUDA_LAUNCH_BLOCKING python -m pipeline.check_gpu --config config.fp16.json --no-cudnn
+```
+
+This reads the first video's prepared pixels and Qwen's cached vision config. It
+uses test weights for the same convolution shape and tests PyTorch's native path
+with cuDNN disabled. It prints each step and exits with a stack trace if GPU work
+takes over 20 seconds. It does not load the full model or write benchmark results.
+The test synchronizes before and after the convolution. Leave launch blocking
+unset here: the [native CUDA implementation](https://github.com/pytorch/pytorch/blob/v2.8.0/aten/src/ATen/native/cuda/NaiveDilatedConvolution.cu)
+processes patches one at a time, so forcing every launch to synchronize adds
+overhead. A watchdog timeout by itself does not establish a GPU fault.
+
+If the convolution keeps failing or timing out, compare a separate environment
+with [PyTorch 2.7.1, torchvision 0.22.1, and CUDA 12.6](https://pytorch.org/get-started/previous-versions/#v271):
+
+```bash
+bash setup_runpod.sh --cu126
+source .venv-cu126/bin/activate
+env -u CUDA_LAUNCH_BLOCKING -u TORCH_CUDNN_V8_API_DISABLED python -m pipeline.check_gpu --config config.fp16.json
+```
+
+This installs its own PyTorch and project dependencies in `.venv-cu126` without
+inheriting template packages. Setup reuses the cached model files. The check uses
+cuDNN normally and retains its 20-second watchdog. If it passes, try captioning:
+
+```bash
+env -u CUDA_LAUNCH_BLOCKING -u TORCH_CUDNN_V8_API_DISABLED python -m pipeline.caption --config config.fp16.json
+```
+
+This is an environment comparison, not a confirmed fix. The CUDA packages are
+large, so the first installation takes longer than setup with template PyTorch.
+
 Stage RSS includes child processes, so Python launchers do not hide the stage's RAM.
 System CPU, RAM, disk, and network counters include other applications. GPU counters
 describe the selected NVML GPU (`gpu_index`); missing metrics are blank, not zero.
@@ -118,6 +206,7 @@ so do not run it alongside the baseline runner.
 │   ├── sample.py
 │   ├── preprocess.py
 │   ├── caption.py
+│   ├── check_gpu.py
 │   ├── write.py
 │   ├── monitor.py
 │   └── plot_resources.py
@@ -131,6 +220,6 @@ selection-file helpers. `run_baseline.py`, `monitor.py`, and `plot_resources.py`
 handle execution, measurements, and the plot. Run each script with
 `python -m pipeline.<module>` from the repository root.
 
-The existing plan is in [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md).
+The existing plan is in [docs/v0_implementation_plan.md](docs/v0_implementation_plan.md).
 Its contents are unchanged. Data, model weights, and results are created when you
 run setup and the pipeline; they are excluded from Git.

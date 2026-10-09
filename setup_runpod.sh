@@ -2,13 +2,30 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-# Reuse the template's CUDA PyTorch rather than installing another large build.
-python -m venv --system-site-packages .venv
-source .venv/bin/activate
+# Default: reuse the template's CUDA PyTorch. --cu126: compare an isolated build.
+case "${1:-}" in
+    "")
+        venv_dir=".venv"
+        python -m venv --system-site-packages "$venv_dir"
+        ;;
+    --cu126)
+        venv_dir=".venv-cu126"
+        python -m venv "$venv_dir"
+        ;;
+    *)
+        echo "Usage: bash setup_runpod.sh [--cu126]" >&2
+        exit 2
+        ;;
+esac
+source "$venv_dir/bin/activate"
 python -m pip install --upgrade pip
+if [[ "$venv_dir" == ".venv-cu126" ]]; then
+    python -m pip install torch==2.7.1 torchvision==0.22.1 --index-url https://download.pytorch.org/whl/cu126
+fi
 python -m pip install -r requirements.txt
 
-python - <<'PY'
+# RunPod templates may enable hf_transfer without installing its optional package.
+HF_HUB_ENABLE_HF_TRANSFER=0 python - <<'PY'
 import torch
 from huggingface_hub import snapshot_download
 from pipeline.common import path, read_args
@@ -16,6 +33,7 @@ from pipeline.common import path, read_args
 if not torch.cuda.is_available():
     raise SystemExit("Choose a RunPod PyTorch GPU template; CUDA PyTorch is required.")
 print("GPU:", torch.cuda.get_device_name(0))
+print("PyTorch:", torch.__version__, "CUDA:", torch.version.cuda, "cuDNN:", torch.backends.cudnn.version())
 config, _ = read_args()
 snapshot_download(
     config["model_id"], local_dir=path(config, "model_dir"),
@@ -24,4 +42,4 @@ snapshot_download(
 print("Qwen is cached. Setup complete.")
 PY
 
-echo "Next: source .venv/bin/activate && python -m pipeline.run_baseline"
+echo "Next: source $venv_dir/bin/activate && python -m pipeline.run_baseline"

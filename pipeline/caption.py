@@ -1,5 +1,7 @@
 """Load cached Qwen weights and caption prepared videos sequentially."""
 
+import time
+
 import torch
 from transformers import AutoTokenizer, Qwen2_5_VLForConditionalGeneration
 
@@ -17,18 +19,27 @@ def main():
         if dtype == torch.bfloat16 and not torch.cuda.is_bf16_supported():
             raise RuntimeError("This GPU needs dtype=float16 in config.json")
     model_dir = path(config, "model_dir")
+    print(f"Loading Qwen on {device} with {dtype}...", flush=True)
+    load_start = time.perf_counter()
     model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
         model_dir, local_files_only=True, torch_dtype=dtype, attn_implementation="sdpa",
     ).to(device).eval()
     tokenizer = AutoTokenizer.from_pretrained(model_dir, local_files_only=True)
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
+    print(f"Model ready on {model.device} with {model.dtype} in {time.perf_counter() - load_start:.2f} seconds", flush=True)
     output = path(config, "data_dir", "captions")
     output.mkdir(parents=True, exist_ok=True)
+    videos = selection(config)
     with torch.inference_mode():
-        for video in selection(config):
+        for index, video in enumerate(videos, start=1):
             video_id = video["video_id"]
+            print(f"Captioning {index}/{len(videos)}: {video_id} (up to {config['max_new_tokens']} new tokens)...", flush=True)
+            video_start = time.perf_counter()
             inputs = torch.load(path(config, "data_dir", "preprocessed", f"{video_id}.pt"), weights_only=True)
             inputs = {key: value.to(device) if torch.is_tensor(value) else value for key, value in inputs.items()}
-            generated = model.generate(**inputs, do_sample=False, max_new_tokens=config["max_new_tokens"])
+            generated = model.generate(**inputs, do_sample=False, temperature=1.0,
+                                       max_new_tokens=config["max_new_tokens"])
             if device.type == "cuda":
                 torch.cuda.synchronize(device)
             new_tokens = generated[0, inputs["input_ids"].shape[1]:].cpu()
@@ -37,6 +48,7 @@ def main():
                 raise ValueError(f"Qwen returned an empty caption for {video_id}")
             (output / f"{video_id}.txt").write_text(caption + "\n", encoding="utf-8")
             print(f"{video_id}: {caption}", flush=True)
+            print(f"Finished {video_id} in {time.perf_counter() - video_start:.2f} seconds ({len(new_tokens)} new tokens)", flush=True)
             del inputs, generated
 
 
