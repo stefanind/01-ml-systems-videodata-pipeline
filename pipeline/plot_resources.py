@@ -5,6 +5,7 @@ import json
 import math
 
 import matplotlib
+
 matplotlib.use("Agg")  # Save a PNG without needing a desktop/display on RunPod.
 import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
@@ -16,17 +17,25 @@ def main():
     """Combine resource samples and stage timings into a shared timeline."""
     config, _ = read_args()
     output = path(config, "output_dir")
+
     with (output / "resources.csv").open(encoding="utf-8", newline="") as source:
         samples = list(csv.DictReader(source))
     with (output / "stages.csv").open(encoding="utf-8", newline="") as source:
         stages = list(csv.DictReader(source))
     metrics = json.loads((output / "metrics.json").read_text(encoding="utf-8"))
+
     times = [float(row["elapsed_seconds"]) for row in samples]
     fig, axes = plt.subplots(5, 1, sharex=True, figsize=(12, 12))
 
     def line(axis, field, label):
         # A blank sample stays missing in the plot instead of appearing as zero.
-        values = [float(row[field]) if row[field] else float("nan") for row in samples]
+        values = []
+        for row in samples:
+            if row[field]:
+                values.append(float(row[field]))
+            else:
+                values.append(float("nan"))
+
         if not any(math.isfinite(value) for value in values):
             label += " (unavailable)"
         axis.plot(times, values, label=label)
@@ -36,34 +45,52 @@ def main():
     line(axes[0], "gpu_percent", "GPU")
     axes[0].set_ylabel("Utilization (%)")
     axes[0].set_ylim(0, 110)
+
     line(axes[1], "ram_used_mib", "System RAM used")
     line(axes[1], "stage_rss_mib", "Stage process RSS")
     axes[1].set_ylabel("RAM (MiB)")
+
     line(axes[2], "gpu_memory_mib", "VRAM used")
     axes[2].set_ylabel("VRAM (MiB)")
+
     line(axes[3], "net_recv_mb_s", "Receive")
     line(axes[3], "net_sent_mb_s", "Transmit")
     axes[3].set_ylabel("Network (MB/s)")
+
     line(axes[4], "disk_read_mb_s", "Read")
     line(axes[4], "disk_write_mb_s", "Write")
     axes[4].set_ylabel("Disk (MB/s)")
+
     # Shade the same stage interval across every panel so resource activity can
     # be matched to the work that was running at that moment.
     for index, stage in enumerate(stages):
-        left, right = float(stage["start_seconds"]), float(stage["end_seconds"])
+        left = float(stage["start_seconds"])
+        right = float(stage["end_seconds"])
         for axis in axes:
             axis.axvspan(left, right, color=f"C{index}", alpha=0.08)
             axis.axvline(left, color="grey", linewidth=0.5)
+
     for axis in axes:
         axis.legend(loc="upper right")
         axis.grid(alpha=0.2)
         axis.set_xlim(0, metrics["total_seconds"])
         axis.set_ylim(bottom=0)
+
     axes[-1].set_xlabel("Seconds from pipeline start")
-    fig.suptitle(f"{metrics['num_videos']} videos | {metrics['throughput']:.4f} videos/second | {metrics['input_mode']}")
-    fig.legend(handles=[Patch(color=f"C{index}", alpha=0.3, label=stage["stage"])
-                        for index, stage in enumerate(stages)],
-               loc="upper center", bbox_to_anchor=(0.5, 0.96), ncol=6)
+    fig.suptitle(
+        f"{metrics['num_videos']} videos | "
+        f"{metrics['throughput']:.4f} videos/second | {metrics['input_mode']}"
+    )
+    stage_labels = []
+    for index, stage in enumerate(stages):
+        stage_labels.append(Patch(color=f"C{index}", alpha=0.3, label=stage["stage"]))
+    fig.legend(
+        handles=stage_labels,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.96),
+        ncol=6,
+    )
+
     fig.tight_layout(rect=[0, 0, 1, 0.94])
     fig.savefig(output / "resource_timeline.png", dpi=150)
     plt.close(fig)

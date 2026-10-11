@@ -106,6 +106,15 @@ elsewhere or change `data_dir`/`output_dir` to preserve an experiment.
   `sample_interval_seconds` in the config.
 - `output/resource_timeline.png`: CPU/GPU utilization, RAM/VRAM usage, network
   bandwidth, and disk read/write bandwidth, with stage boundaries.
+- `output/experiment.json`: configuration, command, input mode, code revision,
+  detected GPU/software versions, and the configured RunPod image.
+- `output/requirements.freeze.txt`: installed packages from the run's Python
+  environment, including the image-provided PyTorch.
+
+Before an experiment, set `runpod_image` in `config.json` to your actual Pod image
+and commit the code, `config.json`, and `shards.txt`. Recording finishes before
+monitoring and timing start. To reproduce a run, use its recorded Git commit,
+image, and GPU, choose a fresh `output_dir`, then run the usual setup and baseline.
 
 Stage times include Python startup, stage setup, and intermediate file I/O.
 Caption time includes loading the cached Qwen model. Total time ends after final
@@ -142,11 +151,13 @@ so do not run it alongside the baseline runner.
 ├── .gitignore
 ├── docs/
 │   ├── v0_implementation_plan.md
-│   └── iterative_progression_plan.md
+│   ├── iterative_progression_plan.md
+│   └── experiment_reproducibility_plan.md
 ├── pipeline/
 │   ├── __init__.py
 │   ├── common.py
 │   ├── run_baseline.py
+│   ├── record_experiment.py
 │   ├── download.py
 │   ├── decode.py
 │   ├── sample.py

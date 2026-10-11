@@ -15,6 +15,7 @@ def download_shard(url, config, token=None, reuse_shards=False):
     filename = parsed.path.rsplit("/", 1)[-1]
     if parsed.scheme not in {"http", "https"} or filename in {"", ".", ".."}:
         raise ValueError(f"Invalid shard URL: {url}")
+
     destination = path(config, "data_dir", "shards")
     destination.mkdir(parents=True, exist_ok=True)
     target = destination / filename
@@ -22,14 +23,20 @@ def download_shard(url, config, token=None, reuse_shards=False):
     # Reuse is explicit so a cached shard cannot silently change a download run.
     if reuse_shards:
         if not target.exists():
-            raise FileNotFoundError(f"Local shard missing: {target}. Run without --reuse-shards first.")
+            raise FileNotFoundError(
+                f"Local shard missing: {target}. Run without --reuse-shards first."
+            )
         print(f"Using local shard: {filename}", flush=True)
         return target
 
     # Send the Hugging Face token only to Hugging Face, never to another host.
-    headers = {"Authorization": f"Bearer {token}"} if token and parsed.hostname == "huggingface.co" else {}
+    headers = {}
+    if token and parsed.hostname == "huggingface.co":
+        headers["Authorization"] = f"Bearer {token}"
+
     temporary = target.with_suffix(target.suffix + ".part")
     print(f"Downloading {filename}", flush=True)
+
     # Stream small chunks to disk instead of holding the whole shard in RAM.
     # Rename only after completion so the final path always contains a full file.
     with requests.get(url, headers=headers, stream=True, timeout=(30, 120)) as response:
@@ -44,10 +51,15 @@ def download_shard(url, config, token=None, reuse_shards=False):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--reuse-shards", action="store_true", help="Skip existing shard files")
+    parser.add_argument(
+        "--reuse-shards",
+        action="store_true",
+        help="Skip existing shard files",
+    )
     config, args = read_args(parser)
     token = get_token()
     filenames = set()
+
     # V0 still downloads every shard in order before the decode stage starts.
     for url in shard_urls(config):
         filename = urlparse(url).path.rsplit("/", 1)[-1]

@@ -1,10 +1,11 @@
 {
+  "runpod_image": "runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04",
   "shards_file": "shards.txt",
   "data_dir": "data",
-  "output_dir": "output",
+  "output_dir": "output/v0_baseline/run1",
   "model_dir": "models/Qwen2.5-VL-3B-Instruct",
   "model_id": "Qwen/Qwen2.5-VL-3B-Instruct",
-  "max_videos": 4,
+  "max_videos": 64,
   "max_seconds": 10,
   "num_frames": 8,
   "min_pixels": 3136,

@@ -26,18 +26,25 @@ def path(config, key, *parts):
 def save_json(destination, value):
     """Write a readable JSON file, creating its parent directory if needed."""
     destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+    json_text = json.dumps(value, indent=2) + "\n"
+    destination.write_text(json_text, encoding="utf-8")
 
 
 def selection(config):
     """Load the ordered video records that decode wrote for later stages."""
-    return json.loads(path(config, "data_dir", "selection.json").read_text(encoding="utf-8"))
+    selection_file = path(config, "data_dir", "selection.json")
+    return json.loads(selection_file.read_text(encoding="utf-8"))
 
 
 def shard_urls(config):
     """Read shard URLs in file order, ignoring comments and empty lines."""
     lines = path(config, "shards_file").read_text(encoding="utf-8").splitlines()
-    urls = [line.strip() for line in lines if line.strip() and not line.lstrip().startswith("#")]
+    urls = []
+    for line in lines:
+        url = line.strip()
+        if url and not url.startswith("#"):
+            urls.append(url)
+
     if not urls:
         raise ValueError("shards.txt must contain at least one shard URL")
     return urls
