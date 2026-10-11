@@ -47,7 +47,10 @@ def main():
     axes[0].set_ylim(0, 110)
 
     line(axes[1], "ram_used_mib", "System RAM used")
-    line(axes[1], "stage_rss_mib", "Stage process RSS")
+    rss_label = "Stage process RSS"
+    if metrics.get("execution_mode") == "shard_sequential":
+        rss_label = "Pipeline process RSS"
+    line(axes[1], "stage_rss_mib", rss_label)
     axes[1].set_ylabel("RAM (MiB)")
 
     line(axes[2], "gpu_memory_mib", "VRAM used")
@@ -61,13 +64,22 @@ def main():
     line(axes[4], "disk_write_mb_s", "Write")
     axes[4].set_ylabel("Disk (MB/s)")
 
+    # Repeated stages use the same color across shards. The V0 stage order keeps
+    # its original colors, and the legend lists each stage only once.
+    stage_colors = {}
+    for stage in stages:
+        name = stage["stage"]
+        if name not in stage_colors:
+            stage_colors[name] = f"C{len(stage_colors)}"
+
     # Shade the same stage interval across every panel so resource activity can
     # be matched to the work that was running at that moment.
-    for index, stage in enumerate(stages):
+    for stage in stages:
         left = float(stage["start_seconds"])
         right = float(stage["end_seconds"])
+        color = stage_colors[stage["stage"]]
         for axis in axes:
-            axis.axvspan(left, right, color=f"C{index}", alpha=0.08)
+            axis.axvspan(left, right, color=color, alpha=0.08)
             axis.axvline(left, color="grey", linewidth=0.5)
 
     for axis in axes:
@@ -82,8 +94,8 @@ def main():
         f"{metrics['throughput']:.4f} videos/second | {metrics['input_mode']}"
     )
     stage_labels = []
-    for index, stage in enumerate(stages):
-        stage_labels.append(Patch(color=f"C{index}", alpha=0.3, label=stage["stage"]))
+    for name, color in stage_colors.items():
+        stage_labels.append(Patch(color=color, alpha=0.3, label=name))
     fig.legend(
         handles=stage_labels,
         loc="upper center",

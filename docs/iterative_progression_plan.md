@@ -9,8 +9,8 @@ VRAM, and disk limits. Some stages will wait when another stage is slower. Keepi
 the limiting stage supplied matters more than making every resource show 100%.
 
 This is the next-step plan after [V0](v0_implementation_plan.md). Iteration 2's
-reusable-function refactor is implemented before establishing the larger baseline,
-as requested. The remaining iterations are future work.
+reusable-function refactor and iteration 3's sequential shard runner are implemented.
+The remaining scheduling iterations are future work.
 
 ## Starting point
 
@@ -64,15 +64,15 @@ does not. Iteration 9 is optional until the earlier versions work reliably.
 - Create a fixed throughput workload of 32 or 64 videos, checking RAM and disk
   capacity first. Keep the ten-second limit and eight frames initially. Establish
   a fresh V0 reference for each workload size using the refactored code.
-- For shard-overlap experiments, explicitly select videos from at least two
-  shards, for example the first eight rows of each. Record their shard names,
-  row indices, and assigned video IDs in a small fixed workload manifest. The
-  current global `max_videos` selection can stop inside the first shard; adding
-  another URL alone does not guarantee processing videos from that shard.
-- Add an opt-in workload-manifest setting to the existing decoder before using
-  this two-shard reference. With a manifest, process exactly its rows and IDs;
-  without one, preserve today's global first-`max_videos` behavior. Both the V0
-  runner and later runners must honor the same selection.
+- For shard-overlap experiments, select videos from at least two shards. Your
+  current 64-video workload uses the first 33 videos of shard A and the first 31
+  of shard B. Both runners preserve this first-`max_videos` selection and its IDs;
+  no additional workload manifest is needed for this comparison.
+- For a future smaller workload that needs rows from multiple shards, an optional
+  fixed manifest could record shard names, row indices, and assigned video IDs.
+  Adding another URL alone does not guarantee selecting videos from that shard.
+  Introduce manifest support only when that workload needs it, and have both
+  runners honor the same selection.
 - Run a candidate and its reference three times on the same Pod. Record every
   result and compare median throughput and the variation between runs.
 - Use separate data/output directories per experiment so stale files cannot
@@ -139,23 +139,34 @@ preparation for scheduling changes, so expect similar performance.
 
 ## 3. Complete one shard at a time
 
-**Implement:** one additional runner, initially named `pipeline/run_sharded.py`.
-Reuse stage functions instead of copying the pipeline into it.
+**Status:** implemented in `pipeline/run_sharded.py`. It imports the existing
+stage functions; `run_baseline.py` remains the reference. Run it with
+`python -m pipeline.run_sharded`, optionally passing `--config` or `--reuse-shards`.
 
 ```text
 shard A: download -> decode selected videos -> sample -> preprocess -> caption -> write
 shard B: download -> decode selected videos -> sample -> preprocess -> caption -> write
 ```
 
-Keep every stage sequential within a shard for this iteration. Retain one loaded
-processor and one Qwen model across the run. V0 already loads Qwen once per run;
-the new runner must preserve that property rather than reload it for every shard.
-Include the loads in total time.
+Every stage remains sequential within a shard. One processor loads during the
+first preprocessing stage and one Qwen model loads during the first caption
+stage. Both remain available across the run. Imports and loads count toward the
+stage times and total time. V0 also loads Qwen once per run.
 
-The coordinator owns the selection metadata and final JSONL writer. Feed it
-per-video records, rather than repeatedly overwriting the global `selection.json`
-or final captions file. It can assemble the final selection manifest once.
-Continue checking the complete expected ID set at the end.
+The runner owns the selection metadata and one final JSONL writer. It collects
+decoded records across shards, saves `selection.json` once, and checks the complete
+expected ID set at the end. Video IDs follow the original global selection order.
+All listed shards are downloaded in full; once `max_videos` is reached, later
+shards need no video processing. Intermediate files remain available for inspection.
+
+The existing six stage metrics sum durations across shards. `stages.csv` adds a
+shard column and records every interval; repeated stages share a color in the plot.
+The 250 ms monitor tracks the runner, including its retained model. The new
+`time_to_first_caption_seconds` measures pipeline start to the first completed
+caption, before that shard's final JSONL writing. A final write interval with an
+empty shard name saves the selection manifest and closes the JSONL file. Total
+time ends after the final output closes; validation and plotting stay outside
+the clock. Use separate data/output directories for comparisons.
 
 First compare the one-shard case with V0, then use the fixed two-shard workload.
 Both runners must process the same selected rows and download the same full shards.

@@ -96,6 +96,33 @@ a missing shard stops the run instead of mixing network input into a local run.
 Stages recompute their selected outputs. Each run overwrites `output/`; copy it
 elsewhere or change `data_dir`/`output_dir` to preserve an experiment.
 
+## Run one shard at a time
+
+Iteration 3 uses the same stage functions and configuration with a different
+execution order:
+
+```bash
+python -m pipeline.run_sharded
+# Or use already downloaded shards:
+python -m pipeline.run_sharded --reuse-shards
+```
+
+Each complete shard passes through download, decode, sampling, preprocessing,
+captioning, and writing before the next shard starts. The processor and Qwen load
+once and remain available for later shards. Work stays sequential; nothing overlaps
+yet. All listed shards are downloaded in full, while `max_videos` still selects
+the first videos across those shards in file order.
+
+Use separate `data_dir` and `output_dir` values when comparing this runner with V0.
+Decoded frames, sampled frames, prepared tensors, and caption files are retained.
+The six stage times sum their intervals across shards, including imports and
+initial loading. `stages.csv` adds a shard column, and the plot uses the same color
+for each stage across shards. `time_to_first_caption_seconds` measures pipeline
+start to the first completed caption, before the shard's final JSONL writing.
+The last write interval saves the selection manifest and closes the JSONL file.
+Total time includes initialization and ends after the final output closes.
+RSS represents the pipeline process, which keeps Qwen in memory between shards.
+
 ## Results
 
 - `output/captions.jsonl`: video IDs, source information, and captions.
@@ -116,7 +143,7 @@ and commit the code, `config.json`, and `shards.txt`. Recording finishes before
 monitoring and timing start. To reproduce a run, use its recorded Git commit,
 image, and GPU, choose a fresh `output_dir`, then run the usual setup and baseline.
 
-Stage times include Python startup, stage setup, and intermediate file I/O.
+V0 stage times include Python startup, stage setup, and intermediate file I/O.
 Caption time includes loading the cached Qwen model. Total time ends after final
 writing and excludes validation and plotting. Failed runs retain partial timings
 with `status: failed`; their throughput is not reported as a successful result.
@@ -157,6 +184,7 @@ so do not run it alongside the baseline runner.
 │   ├── __init__.py
 │   ├── common.py
 │   ├── run_baseline.py
+│   ├── run_sharded.py
 │   ├── record_experiment.py
 │   ├── download.py
 │   ├── decode.py
@@ -173,14 +201,15 @@ so do not run it alongside the baseline runner.
 ```
 
 The six stage scripts live in `pipeline/`. `common.py` shares config, paths, and
-selection-file helpers. `run_baseline.py`, `monitor.py`, and `plot_resources.py`
-handle execution, measurements, and the plot. Run each script with
-`python -m pipeline.<module>` from the repository root.
+selection-file helpers. `run_baseline.py` and `run_sharded.py` handle execution;
+`monitor.py` and `plot_resources.py` handle measurements and the plot. Run each
+script with `python -m pipeline.<module>` from the repository root.
 
 The existing plan is in [docs/v0_implementation_plan.md](docs/v0_implementation_plan.md).
 Its contents are unchanged. Data, model weights, and results are created when you
 run setup and the pipeline; they are excluded from Git.
 
 The [iterative progression plan](docs/iterative_progression_plan.md) describes the
-next experiments. The reusable-function refactor is complete; establish the larger
-fixed-workload baseline before changing scheduling.
+next experiments. The reusable-function refactor and sequential shard runner are
+implemented; compare the shard runner with your fixed-workload V0 results before
+adding overlap.

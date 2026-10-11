@@ -51,8 +51,8 @@ def decode_video(video_bytes, max_seconds):
     return np.stack(frames), np.asarray(timestamps), duration
 
 
-def iter_videos(config):
-    """Yield (video record, encoded bytes) in shard/row order, up to max_videos."""
+def _validate_selection(config):
+    """Reject invalid limits before reading any shards."""
     if config["max_videos"] <= 0 or (
         config["max_seconds"] is not None and config["max_seconds"] <= 0
     ):
@@ -60,36 +60,53 @@ def iter_videos(config):
             "max_videos and max_seconds must be positive; use null for full video duration"
         )
 
+
+def iter_shard_videos(config, url, start_index=0):
+    """Read one shard, continuing global video IDs and the run's video limit."""
+    _validate_selection(config)
+    if start_index >= config["max_videos"]:
+        return
+
+    shard_name = urlparse(url).path.rsplit("/", 1)[-1]
+    shard = pq.ParquetFile(path(config, "data_dir", "shards", shard_name))
+
+    # Read one row at a time; the whole Parquet shard need not fit in RAM.
+    batches = shard.iter_batches(
+        batch_size=1,
+        columns=["mp4", "json"],
+        use_threads=False,
+    )
+    video_index = start_index
+    for row_index, batch in enumerate(batches):
+        row = batch.to_pylist()[0]
+        metadata = row["json"]
+        if not isinstance(metadata, dict):
+            metadata = json.loads(metadata)
+
+        video_bytes = row["mp4"]
+        if isinstance(video_bytes, dict):
+            video_bytes = video_bytes["bytes"]
+
+        # Global IDs continue across shards; row_index starts at zero in each shard.
+        video = {
+            "video_id": f"video-{video_index:05d}",
+            "source_video_id": metadata.get("original_json_filename"),
+            "shard": shard_name,
+            "row_index": row_index,
+            "metadata": metadata,
+        }
+        yield video, video_bytes
+        video_index += 1
+        if video_index == config["max_videos"]:
+            return
+
+
+def iter_videos(config):
+    """Yield (video record, encoded bytes) in shard/row order, up to max_videos."""
+    _validate_selection(config)
     video_index = 0
     for url in shard_urls(config):
-        shard_name = urlparse(url).path.rsplit("/", 1)[-1]
-        shard = pq.ParquetFile(path(config, "data_dir", "shards", shard_name))
-
-        # Read one row at a time; the whole Parquet shard need not fit in RAM.
-        batches = shard.iter_batches(
-            batch_size=1,
-            columns=["mp4", "json"],
-            use_threads=False,
-        )
-        for row_index, batch in enumerate(batches):
-            row = batch.to_pylist()[0]
-            metadata = row["json"]
-            if not isinstance(metadata, dict):
-                metadata = json.loads(metadata)
-
-            video_bytes = row["mp4"]
-            if isinstance(video_bytes, dict):
-                video_bytes = video_bytes["bytes"]
-
-            # Assign IDs from input order before doing any work on the video.
-            # These IDs will stay stable when later versions use parallel workers.
-            video = {
-                "video_id": f"video-{video_index:05d}",
-                "source_video_id": metadata.get("original_json_filename"),
-                "shard": shard_name,
-                "row_index": row_index,
-                "metadata": metadata,
-            }
+        for video, video_bytes in iter_shard_videos(config, url, video_index):
             yield video, video_bytes
             video_index += 1
             if video_index == config["max_videos"]:
